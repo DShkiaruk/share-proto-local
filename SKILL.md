@@ -141,3 +141,12 @@ Then briefly, in prose:
 - The overlay is design-neutral (near-black on white, Geist). If the prototype's brand clashes hard, you may re-tint the CSS variables at the top of `public/overlay.css` — optional, don't gold-plate.
 - Multi-page prototypes (several HTML files): put extra pages in `public/` and inject the overlay tag into each; comments work per-page automatically. Threads remember their page (`page` field), so "Go to comment" navigates across pages by direct URL + deep link — no learned click-graph needed between files.
 - Snapshot sets (frozen pages saved from a real app, e.g. SingleFile exports — scripts stripped, buttons dead): same as multi-page, plus generate a minimal neutral `index.html` listing the screens (styled like login.html), because frozen pages have no working navigation of their own. Reviewers browse via the index; "Go to comment" still teleports them directly.
+
+## Capturing snapshots from a running app (agent recipe)
+
+When the "prototype" is a real app running locally (a dev server) rather than an HTML file, capture the frozen snapshots yourself — do NOT ask the user to click through a browser extension manually, and do NOT tunnel/deploy/share the running app itself.
+
+1. Get from the user: the local app URL and a test account (or ask them to log in once in the browser you drive). Propose the screen/state list yourself from the feature's code — include non-happy states (open panels, hover tooltips, validation errors, empty states), not just the default view.
+2. Drive the app with Playwright (or your browser tool): arrange each state, then serialize the page to ONE self-contained HTML — inject `single-file-core` (npm: `single-file-cli`) into the page and invoke it, or an equivalent serializer that inlines CSS/images/fonts and strips scripts. `page.content()` alone is NOT enough: external CSS/asset URLs would keep pointing at the app. States that exist only as CSS `:hover` need the class/state forced onto the element before serializing.
+3. Verify every snapshot before building: renders offline (zero network requests), `grep` finds no backend/API domains, keys, or tokens in the HTML, and no real personal data is visible on screen (test-account data only).
+4. Continue with the Snapshot sets case above (index page, assemble, local mode or Vercel).
