@@ -1,0 +1,9 @@
+{
+  "name": "proto-share",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@vercel/blob": "latest",
+    "@vercel/edge": "latest"
+  }
+}

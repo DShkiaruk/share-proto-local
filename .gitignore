@@ -1,0 +1,4 @@
+.DS_Store
+
+# local mode runtime (passwords + comments)
+data/
