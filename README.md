@@ -20,6 +20,8 @@ One-time requirements: Claude Code and a free [vercel.com](https://vercel.com) a
 
 **Can't host it externally?** There is a local mode: `node server.js` runs the same gate + comments on your machine with zero dependencies (comments in a local JSON file), and `cloudflared tunnel` gives a temporary share link that dies when you stop the process. See "Local mode" in `SKILL.md`.
 
+**Reviewing someone else's deployment (e.g. PR previews)?** There is an embed mode: one `<script src="https://<comments-host>/overlay.js" defer>` tag on any page turns it commentable — token auth in an in-overlay login modal, comments partitioned per `pr-N` hostname, CORS locked via `ALLOWED_ORIGINS`. See "Embed mode" in `SKILL.md`.
+
 ## For Claude Code (agent instructions)
 
 When a user shares this repository link and asks to build/share/publish a prototype or add commenting to one:

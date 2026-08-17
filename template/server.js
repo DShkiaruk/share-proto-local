@@ -28,7 +28,8 @@ import { randomBytes, webcrypto } from 'node:crypto';
 
 if (!globalThis.crypto) globalThis.crypto = webcrypto; // Node 18
 
-const { createToken, sessionFromRequest } = await import('./lib/session.js');
+const { createToken, sessionFromHeaders } = await import('./lib/session.js');
+const { applyCors, roomFromReq } = await import('./lib/cors.js');
 
 const ROOT = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC = path.join(ROOT, 'public');
@@ -84,13 +85,23 @@ const SECRETS = loadSecrets();
 
 /* ---------- storage: in-memory, atomic JSON persistence ---------- */
 
-let store = { threads: [], nav: {} };
+// Rooms partition comments (one per PR preview in embed mode); classic
+// same-origin traffic lives in room "_". Old flat files migrate on load.
+let store = { rooms: {} };
 try {
   const loaded = JSON.parse(fs.readFileSync(COMMENTS_FILE, 'utf8'));
-  store.threads = Array.isArray(loaded.threads) ? loaded.threads : [];
-  store.nav = loaded.nav && typeof loaded.nav === 'object' ? loaded.nav : {};
+  if (loaded.rooms && typeof loaded.rooms === 'object') {
+    store.rooms = loaded.rooms;
+  } else if (Array.isArray(loaded.threads)) {
+    store.rooms['_'] = { threads: loaded.threads, nav: loaded.nav || {} };
+  }
 } catch {
   /* first run */
+}
+
+function roomStore(room) {
+  const key = room || '_';
+  return (store.rooms[key] ||= { threads: [], nav: {} });
 }
 
 let writeChain = Promise.resolve();
@@ -172,7 +183,9 @@ async function apiLogin(req, res) {
     SECRETS.sessionSecret
   );
   setSessionCookie(req, res, token, SIXTY_DAYS_S);
-  return json(res, 200, { role });
+  // Token in the body too: embed mode (overlay on a foreign page) can't use
+  // cross-site cookies and sends it back as a Bearer header.
+  return json(res, 200, { role, token });
 }
 
 function apiLogout(req, res) {
@@ -183,18 +196,19 @@ function apiLogout(req, res) {
 
 async function apiComments(req, res, session) {
   const role = session.r;
+  const S = roomStore(roomFromReq(req));
   // Author identity comes from the signed session, never from the body —
   // role filtering is only as trustworthy as authorship (same as api/comments.js).
   const author = clean(session.n, MAX_NAME) || (role === 'designer' ? 'Designer' : 'Client');
 
   if (req.method === 'GET') {
     const nav = {};
-    for (const [k, v] of Object.entries(store.nav)) nav[k] = v.anchor;
+    for (const [k, v] of Object.entries(S.nav)) nav[k] = v.anchor;
     return json(res, 200, {
       role,
       name: author,
       nav,
-      threads: store.threads.filter((t) => canSee(role, t)),
+      threads: S.threads.filter((t) => canSee(role, t)),
     });
   }
   if (req.method !== 'POST') return json(res, 405, { error: 'Method not allowed' });
@@ -210,11 +224,11 @@ async function apiComments(req, res, session) {
     if (!from || !to || from === to || !anchor || JSON.stringify(anchor).length > 3000) {
       return json(res, 400, { error: 'Bad edge' });
     }
-    store.nav[`${from}>${to}`] = { anchor, at: now };
-    const keys = Object.keys(store.nav);
+    S.nav[`${from}>${to}`] = { anchor, at: now };
+    const keys = Object.keys(S.nav);
     if (keys.length > NAV_CAP) {
-      keys.sort((a, b) => store.nav[a].at - store.nav[b].at);
-      while (keys.length > NAV_CAP) delete store.nav[keys.shift()];
+      keys.sort((a, b) => S.nav[a].at - S.nav[b].at);
+      while (keys.length > NAV_CAP) delete S.nav[keys.shift()];
     }
     await persist();
     return json(res, 200, { ok: true });
@@ -236,14 +250,14 @@ async function apiComments(req, res, session) {
       resolved: false,
       messages: [{ author, role, text, at: now }],
     };
-    store.threads.push(thread);
+    S.threads.push(thread);
     await persist();
     return json(res, 200, { thread });
   }
 
   const tid = String(body.threadId || '');
   if (!/^[a-f0-9-]{36}$/.test(tid)) return json(res, 404, { error: 'Thread not found' });
-  const thread = store.threads.find((t) => t.id === tid);
+  const thread = S.threads.find((t) => t.id === tid);
   if (!thread || !canSee(role, thread)) {
     return json(res, 404, { error: 'Thread not found' });
   }
@@ -267,7 +281,7 @@ async function apiComments(req, res, session) {
   } else if (action === 'delete') {
     const own = thread.authorRole === role && thread.author === author;
     if (role !== 'designer' && !own) return json(res, 403, { error: 'Not allowed' });
-    store.threads = store.threads.filter((t) => t.id !== tid);
+    S.threads = S.threads.filter((t) => t.id !== tid);
     await persist();
     return json(res, 200, { ok: true });
   } else {
@@ -355,16 +369,32 @@ const server = http.createServer(async (req, res) => {
   try {
     const pathname = new URL(req.url, 'http://local').pathname;
 
+    if (pathname.startsWith('/api/')) {
+      if (applyCors(req, res, process.env.ALLOWED_ORIGINS)) return;
+    }
     if (pathname === '/api/login') return await apiLogin(req, res);
     if (pathname === '/api/logout') return apiLogout(req, res);
 
-    const session = await sessionFromRequest(req.headers.cookie || '', SECRETS.sessionSecret);
+    const session = await sessionFromHeaders(
+      req.headers.cookie || '',
+      req.headers.authorization || '',
+      SECRETS.sessionSecret
+    );
 
     if (pathname === '/api/comments') {
       if (!session) return json(res, 401, { error: 'Not authenticated' });
       return await apiComments(req, res, session);
     }
     if (pathname.startsWith('/api/')) return json(res, 404, { error: 'Not found' });
+
+    // Overlay assets are loaded cross-origin by embedded installs (script/link
+    // tags don't need CORS, but the overlay's HEAD version-check does).
+    if (pathname === '/overlay.js' || pathname === '/overlay.css') {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Access-Control-Expose-Headers', 'ETag');
+      const hit = resolveFile(pathname);
+      if (hit) return sendFile(req, res, hit.file, hit.st);
+    }
 
     if (!session && !OPEN_PATHS.has(pathname)) {
       // Same behavior as middleware.js: rewrite (not redirect) to the login

@@ -904,3 +904,76 @@
     transition-duration: 1ms !important;
   }
 }
+
+/* ---------- embed login modal (shown when the overlay runs on a foreign
+   page — e.g. a PR preview — and has no valid token yet) ---------- */
+
+.login-wrap {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(0 0 0 / 0.35);
+  pointer-events: auto;
+  z-index: 30;
+}
+
+.login-card {
+  width: 320px;
+  max-width: calc(100vw - 48px);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.login-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.login-sub {
+  color: var(--muted-fg);
+  margin-bottom: 4px;
+}
+
+.login-input {
+  font: inherit;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  outline: none;
+}
+
+.login-input:focus {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px var(--ring);
+}
+
+.login-err {
+  color: var(--danger);
+  min-height: 1em;
+}
+
+.login-btn {
+  font: inherit;
+  font-weight: 500;
+  color: var(--primary-fg);
+  background: var(--primary);
+  border: none;
+  border-radius: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+}
+
+.login-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

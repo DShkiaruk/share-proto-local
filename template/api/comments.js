@@ -1,5 +1,6 @@
 import { list, put, del } from '@vercel/blob';
-import { sessionFromRequest } from '../lib/session.js';
+import { sessionFromHeaders } from '../lib/session.js';
+import { applyCors, roomFromReq } from '../lib/cors.js';
 
 /* Storage model: append-only. Every mutation writes a NEW blob with a unique
    pathname (never overwrites), because the Blob CDN caches overwritten
@@ -41,20 +42,22 @@ async function fetchJson(blob) {
   }
 }
 
-function writeEvent(tid, at, payload) {
+function writeEvent(root, tid, at, payload) {
   return put(
-    `threads/${tid}/${ts(at)}-${crypto.randomUUID()}.json`,
+    `${root}threads/${tid}/${ts(at)}-${crypto.randomUUID()}.json`,
     JSON.stringify(payload),
     { access: 'public', addRandomSuffix: false, contentType: 'application/json' }
   );
 }
 
-function assemble(events) {
+function assemble(events, root) {
   // events: [{pathname, data}] for one or many threads
   const byThread = new Map();
   for (const { pathname, data } of events) {
     if (!data) continue;
-    const parts = pathname.split('/');
+    // Rooms nest everything under rooms/<room>/ — strip before parsing.
+    const rel = root && pathname.startsWith(root) ? pathname.slice(root.length) : pathname;
+    const parts = rel.split('/');
     if (parts.length !== 3) continue; // ignore legacy/foreign blobs
     const tid = parts[1];
     if (!byThread.has(tid)) byThread.set(tid, []);
@@ -94,28 +97,28 @@ function assemble(events) {
   return threads;
 }
 
-async function reconstruct(prefix) {
+async function reconstruct(root, prefix) {
   const blobs = await listAll(prefix);
   const events = await Promise.all(
     blobs.map(async (b) => ({ pathname: b.pathname, data: await fetchJson(b) }))
   );
-  return assemble(events);
+  return assemble(events, root);
 }
 
-async function loadSnapshot() {
-  const { blobs } = await list({ prefix: 'snap/', limit: 1 });
+async function loadSnapshot(root) {
+  const { blobs } = await list({ prefix: `${root}snap/`, limit: 1 });
   if (!blobs.length) return null;
   return fetchJson(blobs[0]);
 }
 
-async function writeSnapshot(threads, at) {
-  await put(`snap/${invTs(at)}-${crypto.randomUUID()}.json`, JSON.stringify(threads), {
+async function writeSnapshot(root, threads, at) {
+  await put(`${root}snap/${invTs(at)}-${crypto.randomUUID()}.json`, JSON.stringify(threads), {
     access: 'public',
     addRandomSuffix: false,
     contentType: 'application/json',
   });
   // GC: keep the 5 newest snapshots
-  const { blobs } = await list({ prefix: 'snap/', limit: 100 });
+  const { blobs } = await list({ prefix: `${root}snap/`, limit: 100 });
   const stale = blobs.slice(5);
   if (stale.length) await del(stale.map((b) => b.url)).catch(() => {});
 }
@@ -124,47 +127,52 @@ async function writeSnapshot(threads, at) {
 
 const NAV_CAP = 500;
 
-async function loadNavSnap() {
-  const { blobs } = await list({ prefix: 'navsnap/', limit: 1 });
+async function loadNavSnap(root) {
+  const { blobs } = await list({ prefix: `${root}navsnap/`, limit: 1 });
   if (!blobs.length) return {};
   return (await fetchJson(blobs[0])) || {};
 }
 
-async function rebuildNavSnap(at) {
-  const blobs = await listAll('nav/');
+async function rebuildNavSnap(root, at) {
+  const blobs = await listAll(`${root}nav/`);
   const edges = (await Promise.all(blobs.map(fetchJson))).filter(Boolean);
   edges.sort((a, b) => a.at - b.at);
   const map = {};
   for (const e of edges) map[`${e.from}>${e.to}`] = { anchor: e.anchor, at: e.at };
   const keys = Object.keys(map).sort((a, b) => map[a].at - map[b].at);
   while (keys.length > NAV_CAP) delete map[keys.shift()];
-  await put(`navsnap/${invTs(at)}-${crypto.randomUUID()}.json`, JSON.stringify(map), {
+  await put(`${root}navsnap/${invTs(at)}-${crypto.randomUUID()}.json`, JSON.stringify(map), {
     access: 'public',
     addRandomSuffix: false,
     contentType: 'application/json',
   });
-  const snaps = await list({ prefix: 'navsnap/', limit: 100 });
+  const snaps = await list({ prefix: `${root}navsnap/`, limit: 100 });
   const stale = snaps.blobs.slice(3);
   if (stale.length) await del(stale.map((b) => b.url)).catch(() => {});
 }
 
-async function snapshotAll(at, patch) {
+async function snapshotAll(root, at, patch) {
   // Full rebuild from raw events, then force-apply the mutation we just
   // wrote: list() can lag a freshly-put blob by a moment, and the caller's
   // own write must be reflected in the snapshot it produces.
-  let threads = await reconstruct('threads/');
+  let threads = await reconstruct(root, `${root}threads/`);
   if (patch) threads = patch(threads);
   threads.sort((a, b) => a.createdAt - b.createdAt);
-  await writeSnapshot(threads, at);
+  await writeSnapshot(root, threads, at);
   return threads;
 }
 
 export default async function handler(req, res) {
-  const session = await sessionFromRequest(
+  if (applyCors(req, res, process.env.ALLOWED_ORIGINS)) return;
+  const session = await sessionFromHeaders(
     req.headers.cookie || '',
+    req.headers.authorization || '',
     process.env.SESSION_SECRET
   );
   if (!session) return res.status(401).json({ error: 'Not authenticated' });
+  // Room = one comment partition per PR preview (empty for classic installs).
+  const room = roomFromReq(req);
+  const root = room ? `rooms/${room}/` : '';
   const role = session.r;
   // Author identity comes from the signed session (set at login), never from
   // the request body — client sees only client threads, so authorship must be
@@ -174,8 +182,8 @@ export default async function handler(req, res) {
 
   if (req.method === 'GET') {
     const [threads, navRaw] = await Promise.all([
-      loadSnapshot().then((s) => s ?? reconstruct('threads/')),
-      loadNavSnap(),
+      loadSnapshot(root).then((s) => s ?? reconstruct(root, `${root}threads/`)),
+      loadNavSnap(root),
     ]);
     const nav = {};
     for (const [k, v] of Object.entries(navRaw)) nav[k] = v.anchor;
@@ -200,11 +208,11 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Bad edge' });
     }
     await put(
-      `nav/e-${ts(now)}-${crypto.randomUUID()}.json`,
+      `${root}nav/e-${ts(now)}-${crypto.randomUUID()}.json`,
       JSON.stringify({ from, to, anchor, at: now }),
       { access: 'public', addRandomSuffix: false, contentType: 'application/json' }
     );
-    await rebuildNavSnap(now);
+    await rebuildNavSnap(root, now);
     return res.status(200).json({ ok: true });
   }
 
@@ -225,7 +233,7 @@ export default async function handler(req, res) {
       resolved: false,
       messages: [{ author, role, text, at: now }],
     };
-    await writeEvent(tid, now, {
+    await writeEvent(root, tid, now, {
       type: 'msg',
       at: now,
       author,
@@ -240,7 +248,7 @@ export default async function handler(req, res) {
         page: fullThread.page,
       },
     });
-    const threads = await snapshotAll(now, (all) =>
+    const threads = await snapshotAll(root, now, (all) =>
       all.some((t) => t.id === tid) ? all : [...all, fullThread]
     );
     const thread = threads.find((t) => t.id === tid);
@@ -249,7 +257,7 @@ export default async function handler(req, res) {
 
   const tid = String(body.threadId || '');
   if (!/^[a-f0-9-]{36}$/.test(tid)) return res.status(404).json({ error: 'Thread not found' });
-  const [existing] = await reconstruct(`threads/${tid}/`);
+  const [existing] = await reconstruct(root, `${root}threads/${tid}/`);
   if (!existing || !canSee(role, existing)) {
     return res.status(404).json({ error: 'Thread not found' });
   }
@@ -259,7 +267,7 @@ export default async function handler(req, res) {
     const text = clean(body.text, MAX_TEXT);
     if (!text) return res.status(400).json({ error: 'Missing text' });
     const msg = { author, role, text, at: now };
-    await writeEvent(tid, now, { type: 'msg', ...msg });
+    await writeEvent(root, tid, now, { type: 'msg', ...msg });
     patch = (all) =>
       all.map((t) =>
         t.id === tid && !t.messages.some((m) => m.at === now && m.author === author)
@@ -274,7 +282,7 @@ export default async function handler(req, res) {
     if (!msg || msg.author !== author || msg.role !== role) {
       return res.status(403).json({ error: 'Not your message' });
     }
-    await writeEvent(tid, now, { type: 'edit', at: now, target, text });
+    await writeEvent(root, tid, now, { type: 'edit', at: now, target, text });
     patch = (all) =>
       all.map((t) =>
         t.id === tid
@@ -288,13 +296,13 @@ export default async function handler(req, res) {
       );
   } else if (action === 'resolve') {
     const resolved = Boolean(body.resolved);
-    await writeEvent(tid, now, { type: 'state', at: now, resolved });
+    await writeEvent(root, tid, now, { type: 'state', at: now, resolved });
     patch = (all) => all.map((t) => (t.id === tid ? { ...t, resolved } : t));
   } else if (action === 'delete') {
     const own = existing.authorRole === role && existing.author === author;
     if (role !== 'designer' && !own) return res.status(403).json({ error: 'Not allowed' });
-    await writeEvent(tid, now, { type: 'tomb', at: now });
-    const old = await listAll(`threads/${tid}/`);
+    await writeEvent(root, tid, now, { type: 'tomb', at: now });
+    const old = await listAll(`${root}threads/${tid}/`);
     const gone = old.filter((b) => !b.pathname.includes(ts(now)));
     if (gone.length) await del(gone.map((b) => b.url)).catch(() => {});
     patch = (all) => all.filter((t) => t.id !== tid);
@@ -302,7 +310,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Unknown action' });
   }
 
-  const threads = await snapshotAll(now, patch);
+  const threads = await snapshotAll(root, now, patch);
   if (action === 'delete') return res.status(200).json({ ok: true });
   return res.status(200).json({ thread: threads.find((t) => t.id === tid) });
 }

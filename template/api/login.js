@@ -1,8 +1,10 @@
 import { createToken } from '../lib/session.js';
+import { applyCors } from '../lib/cors.js';
 
 const SIXTY_DAYS_S = 60 * 24 * 60 * 60;
 
 export default async function handler(req, res) {
+  if (applyCors(req, res, process.env.ALLOWED_ORIGINS)) return;
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -29,5 +31,7 @@ export default async function handler(req, res) {
     'Set-Cookie',
     `fp_session=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${SIXTY_DAYS_S}`
   );
-  return res.status(200).json({ role });
+  // The token also goes in the body: embed mode (overlay on a foreign page)
+  // can't use cross-site cookies and sends it back as a Bearer header.
+  return res.status(200).json({ role, token });
 }

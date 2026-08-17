@@ -6,6 +6,33 @@
   const PASTELS = ['#dbffd5', '#d5edff', '#ffd4b1', '#f4d5ff', '#fff3c4', '#ffd5d5'];
   const POLL_MS = 25000;
 
+  /* ---------- embed mode ----------
+     When this script is served from a different origin than the page it runs
+     on (e.g. dropped into a client's PR preview), the page has no share-proto
+     server of its own: API and asset URLs point at the script's origin, auth
+     is a Bearer token (cross-site cookies don't survive), login happens in an
+     in-overlay modal, and comments are partitioned into a room derived from
+     the preview hostname (pr-N.<domain> → room "pr-n"). Same-origin installs
+     behave exactly as before. */
+  const API_ORIGIN = (() => {
+    try {
+      return new URL(document.currentScript.src).origin;
+    } catch {
+      return location.origin;
+    }
+  })();
+  const EMBED = API_ORIGIN !== location.origin;
+  const ROOM = EMBED
+    ? (location.hostname.toLowerCase().match(/^(pr-\d+)\./) || [])[1] ||
+      location.hostname.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 63)
+    : null;
+  const TOKEN_KEY = `fp_token::${API_ORIGIN}`;
+  let authToken = EMBED ? localStorage.getItem(TOKEN_KEY) : null;
+  const apiUrl = (path) =>
+    (EMBED ? API_ORIGIN : '') + path + (ROOM ? `?room=${encodeURIComponent(ROOM)}` : '');
+  const authHeaders = () =>
+    EMBED && authToken ? { Authorization: `Bearer ${authToken}` } : {};
+
   // Exact Lucide icon paths (lucide.dev, ISC) — stroke 2, viewBox 24.
   const svg = (inner) =>
     `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
@@ -141,7 +168,7 @@
   const shadow = host.attachShadow({ mode: 'open' });
   const link = document.createElement('link');
   link.rel = 'stylesheet';
-  link.href = '/overlay.css';
+  link.href = (EMBED ? API_ORIGIN : '') + '/overlay.css';
   shadow.appendChild(link);
   const root = el('div', 'root');
   shadow.appendChild(root);
@@ -323,17 +350,96 @@
   /* ---------- api ---------- */
 
   async function api(method, body) {
-    const r = await fetch('/api/comments', {
+    const r = await fetch(apiUrl('/api/comments'), {
       method,
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      headers: {
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+        ...authHeaders(),
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
     if (r.status === 401) {
-      location.reload();
+      if (EMBED) {
+        // Token missing/expired: ask for credentials in place — the host page
+        // is the client's preview, there is no login page to bounce to.
+        authToken = null;
+        localStorage.removeItem(TOKEN_KEY);
+        showLogin();
+      } else {
+        location.reload(); // same-origin: the server gate shows login.html
+      }
       throw new Error('unauthenticated');
     }
     if (!r.ok) throw new Error(`api ${r.status}`);
     return r.json();
+  }
+
+  /* ---------- embed login modal ---------- */
+
+  let loginCard = null;
+  function showLogin() {
+    if (loginCard) return;
+    setMode(false);
+    toolbar.style.display = 'none';
+    loginCard = el('div', 'login-wrap');
+    const card = el('div', 'login-card');
+    card.appendChild(el('div', 'login-title', 'Design review comments'));
+    card.appendChild(
+      el('div', 'login-sub', 'Enter your name and the password you received — comments you leave will be signed with your name.')
+    );
+    const nameIn = el('input', 'login-input');
+    nameIn.placeholder = 'Your name';
+    nameIn.value = localStorage.getItem('fp_name') || '';
+    const passIn = el('input', 'login-input');
+    passIn.placeholder = 'Password';
+    passIn.type = 'password';
+    const err = el('div', 'login-err');
+    const btn = el('button', 'login-btn', 'Continue');
+    const submit = async () => {
+      const name = nameIn.value.trim();
+      const password = passIn.value.trim();
+      if (!name) return err.replaceChildren('Please enter your name.');
+      if (!password) return err.replaceChildren('Please enter the password.');
+      btn.disabled = true;
+      btn.textContent = 'Checking…';
+      try {
+        const r = await fetch(API_ORIGIN + '/api/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, password }),
+        });
+        if (!r.ok) {
+          err.replaceChildren('That password didn’t work.');
+          passIn.select();
+          return;
+        }
+        const data = await r.json();
+        if (!data.token) {
+          err.replaceChildren('Server is too old for embed mode.');
+          return;
+        }
+        authToken = data.token;
+        localStorage.setItem(TOKEN_KEY, authToken);
+        localStorage.setItem('fp_name', name);
+        loginCard.remove();
+        loginCard = null;
+        toolbar.style.display = '';
+        refresh();
+      } catch {
+        err.replaceChildren('Network error — try again.');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Continue';
+      }
+    };
+    btn.addEventListener('click', submit);
+    card.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') submit();
+    });
+    card.append(nameIn, passIn, err, btn);
+    loginCard.appendChild(card);
+    root.appendChild(loginCard);
+    (nameIn.value ? passIn : nameIn).focus();
   }
 
   let inflight = null;
@@ -1217,7 +1323,16 @@
     const foot = el('div', 'sb-foot');
     foot.appendChild(el('span', 'me', `Signed in as ${myLabel()} · ${roleLabel()}`));
     const out = el('a', null, 'Sign out');
-    out.href = '/api/logout';
+    if (EMBED) {
+      out.href = '#';
+      out.addEventListener('click', (e) => {
+        e.preventDefault();
+        localStorage.removeItem(TOKEN_KEY);
+        location.reload();
+      });
+    } else {
+      out.href = '/api/logout';
+    }
     foot.appendChild(out);
     sidebar.appendChild(foot);
   }
@@ -1349,7 +1464,10 @@
   let staleNotified = false;
   async function checkOverlayVersion() {
     try {
-      const r = await fetch('/overlay.js', { method: 'HEAD', cache: 'no-store' });
+      const r = await fetch((EMBED ? API_ORIGIN : '') + '/overlay.js', {
+        method: 'HEAD',
+        cache: 'no-store',
+      });
       const tag = r.headers.get('etag');
       if (!tag) return;
       if (overlayEtag === null) overlayEtag = tag;

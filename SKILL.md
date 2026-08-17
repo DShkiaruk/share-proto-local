@@ -29,6 +29,40 @@ Same system without deploying anywhere: `template/server.js` (plain Node >= 18, 
 
 **App-build case** (the prototype is a static build of a real app, many files — e.g. a demo build with mocked APIs): assemble any placeholder HTML first, then replace `public/index.html` and add the build's assets into `public/`, keeping `overlay.js`, `overlay.css`, `login.html`, `favicon.svg` in place; inject `<script src="/overlay.js" defer></script>` before `</body>` of the build's index.html (assemble.py's injection logic). If the app uses client-side routing, run `node server.js --spa` (serves index.html for extension-less paths). Never point such a build at a real backend — mock the data layer first; this server only adds the gate + comments.
 
+## Embed mode — overlay on someone else's page
+
+The overlay can be dropped into a page it does not serve (e.g. a client's PR
+preview on S3/CloudFront) with a single tag:
+
+```html
+<script src="https://<comments-host>/overlay.js" defer></script>
+```
+
+It detects embed mode by comparing the script's origin to the page's origin.
+Everything then adapts automatically:
+
+- **API + assets** go to the script's origin (the comments host).
+- **Auth** is a Bearer token (cross-site cookies don't survive): an in-overlay
+  login modal appears instead of the login page; the token lives in the
+  preview origin's localStorage. Login still returns `{role}` for classic
+  installs — embed additionally uses the `token` field.
+- **Rooms**: comments are partitioned per preview — hostname `pr-N.<domain>`
+  → room `pr-n` (other hostnames slug to a room name). Query param `room=` on
+  `/api/comments`; server-side storage nests under `rooms/<room>/` (Blob) or
+  `store.rooms[<room>]` (local server). Classic same-origin traffic keeps the
+  old paths / room `_`.
+- **CORS**: the comments host must set `ALLOWED_ORIGINS` (comma-separated,
+  `*` matches one hostname label run): e.g.
+  `ALLOWED_ORIGINS=https://pr-*.preview.acme.com`. Unlisted origins get no
+  CORS headers and the browser blocks the call. `/overlay.js`+`/overlay.css`
+  are served with `Access-Control-Allow-Origin: *` (public script; the HEAD
+  version-check needs it).
+
+Deployment of the comments host is just the normal flow (Vercel steps below,
+or Local mode) — the assembled `public/index.html` is irrelevant to embedded
+pages; only `/overlay.js`, `/overlay.css` and `/api/*` matter. Set
+`ALLOWED_ORIGINS` as an env var in both cases.
+
 ## Hard rules
 
 - **Never rewrite `api/comments.js` storage logic.** It is append-only on purpose: Vercel Blob's CDN caches overwritten blobs for ~60s, so overwriting = replies/resolves silently reverting. Every mutation writes a new immutable blob + snapshot.

@@ -64,3 +64,12 @@ export async function sessionFromRequest(cookieHeader, secret) {
   const cookies = parseCookies(cookieHeader);
   return verifyToken(cookies.fp_session, secret);
 }
+
+// Embed mode sends the session as `Authorization: Bearer <token>` because
+// cross-site cookies don't survive. Cookie wins ties (same-origin installs).
+export async function sessionFromHeaders(cookieHeader, authHeader, secret) {
+  const viaCookie = await sessionFromRequest(cookieHeader, secret);
+  if (viaCookie) return viaCookie;
+  const m = /^Bearer\s+(.+)$/i.exec(authHeader || '');
+  return m ? verifyToken(m[1].trim(), secret) : null;
+}
