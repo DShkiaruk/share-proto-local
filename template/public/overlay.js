@@ -14,16 +14,21 @@
      in-overlay modal, and comments are partitioned into a room derived from
      the preview hostname (pr-N.<domain> → room "pr-n"). Same-origin installs
      behave exactly as before. */
+  const SCRIPT_EL = document.currentScript;
   const API_ORIGIN = (() => {
     try {
-      return new URL(document.currentScript.src).origin;
+      return new URL(SCRIPT_EL.src).origin;
     } catch {
       return location.origin;
     }
   })();
-  const EMBED = API_ORIGIN !== location.origin;
+  // data-embed forces embed mode on a same-origin page (the host's own /demo);
+  // data-room pins the comment room instead of deriving it from the hostname.
+  const EMBED =
+    API_ORIGIN !== location.origin || Boolean(SCRIPT_EL && SCRIPT_EL.hasAttribute('data-embed'));
   const ROOM = EMBED
-    ? (location.hostname.toLowerCase().match(/^(pr-\d+)\./) || [])[1] ||
+    ? (SCRIPT_EL && SCRIPT_EL.getAttribute('data-room')) ||
+      (location.hostname.toLowerCase().match(/^(pr-\d+)\./) || [])[1] ||
       location.hostname.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 63)
     : null;
   const TOKEN_KEY = `fp_token::${API_ORIGIN}`;

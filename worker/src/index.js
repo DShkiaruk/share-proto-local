@@ -234,6 +234,42 @@ export default {
 
     if (url.pathname.startsWith('/api/')) return json(404, { error: 'Not found' }, cors);
 
+    // Built-in playground: a fake screen with the overlay attached, so the
+    // interface can be tried (and shown to reviewers) before any real PR
+    // preview carries it. Same origin — data-embed forces embed mode, and
+    // data-room keeps demo comments out of real PR rooms.
+    if (url.pathname === '/demo') {
+      return new Response(
+        `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Overlay demo — fake screen</title>
+<style>body{font-family:system-ui,sans-serif;margin:0;color:#171717;background:#fafafa}
+header{background:#fff;border-bottom:1px solid #e5e5e5;padding:14px 28px;display:flex;gap:24px;align-items:center}
+header b{font-size:15px}header span{color:#737373;font-size:13px}
+main{max-width:720px;margin:32px auto;padding:0 24px}
+.hint{background:#eef6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 16px;font-size:13px;color:#1e40af;margin-bottom:24px}
+.card{background:#fff;border:1px solid #e5e5e5;border-radius:12px;padding:20px;margin-bottom:16px}
+.card h2{margin:0 0 6px;font-size:16px}.card p{margin:0;color:#525252;font-size:14px}
+table{width:100%;border-collapse:collapse;font-size:14px}
+td,th{text-align:left;padding:10px 12px;border-bottom:1px solid #f0f0f0}th{color:#737373;font-weight:500;font-size:12px}
+button.cta{background:#171717;color:#fff;border:none;border-radius:8px;padding:10px 16px;font-size:14px;cursor:pointer}
+</style></head><body>
+<header><b>Demo Screen</b><span>a fake app page for trying the comment overlay</span></header>
+<main>
+<div class="hint">Sign in with the review password you received, then press <b>C</b> (or tap Comment) and click anywhere — on the heading, a table row, the button. Threads live in the sidebar on the right.</div>
+<div class="card"><h2>Budget Adjustments</h2><p>This card pretends to be a real component. Leave a pin on it.</p></div>
+<div class="card"><table><tr><th>Line item</th><th>Requested draw</th></tr>
+<tr><td>Foundation works</td><td>$18,500.00</td></tr>
+<tr><td>Framing</td><td>$42,300.00</td></tr>
+<tr><td>Electrical rough-in</td><td>$9,780.00</td></tr></table></div>
+<button class="cta">Submit for review</button>
+</main>
+<script src="/overlay.js" data-embed data-room="demo" defer></script>
+</body></html>`,
+        { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }
+      );
+    }
+
     // The bare host has no prototype to serve (embed-only install) — show a
     // small status page instead of a naked 404: this URL gets clicked from
     // Slack/PR descriptions and must not look broken.
@@ -251,6 +287,8 @@ There is nothing to browse here — the overlay appears on the preview pages
 themselves (press <code>C</code> to comment).</p>
 <p>It stores only comment text and commenter names, partitioned per PR.
 Endpoints: <code>/overlay.js</code>, <code>/api/login</code>, <code>/api/comments</code>.</p>
+<p>Want to try the interface? <a href="/demo">Open the demo screen</a> and sign
+in with a review password.</p>
 </body></html>`,
         { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }
       );
