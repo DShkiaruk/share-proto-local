@@ -233,6 +233,28 @@ export default {
     }
 
     if (url.pathname.startsWith('/api/')) return json(404, { error: 'Not found' }, cors);
+
+    // The bare host has no prototype to serve (embed-only install) — show a
+    // small status page instead of a naked 404: this URL gets clicked from
+    // Slack/PR descriptions and must not look broken.
+    if (url.pathname === '/') {
+      return new Response(
+        `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review comments service</title>
+<style>body{font-family:system-ui,sans-serif;max-width:560px;margin:15vh auto 0;padding:0 24px;color:#171717;line-height:1.6}
+h1{font-size:20px}code{background:#f5f5f5;border-radius:4px;padding:1px 5px;font-size:13px}
+p{color:#525252}.ok{color:#16a34a;font-weight:600}</style></head><body>
+<h1>Review comments service <span class="ok">● operational</span></h1>
+<p>This service powers the design-review comment overlay on PR previews.
+There is nothing to browse here — the overlay appears on the preview pages
+themselves (press <code>C</code> to comment).</p>
+<p>It stores only comment text and commenter names, partitioned per PR.
+Endpoints: <code>/overlay.js</code>, <code>/api/login</code>, <code>/api/comments</code>.</p>
+</body></html>`,
+        { status: 200, headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' } }
+      );
+    }
     return env.ASSETS.fetch(req);
   },
 };
