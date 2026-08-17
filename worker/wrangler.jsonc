@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "eleken-review-comments",
+  "main": "src/index.js",
+  "compatibility_date": "2025-06-01",
+  // Static overlay assets come straight from the template — no copies to drift.
+  // /api/* and the overlay files go through the worker (CORS headers); the
+  // rest (login.html, favicon, stub index) is served as plain assets.
+  "assets": {
+    "directory": "../template/public",
+    "binding": "ASSETS",
+    "run_worker_first": ["/api/*", "/overlay.js", "/overlay.css"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "ROOM", "class_name": "CommentsRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CommentsRoom"] }],
+  "observability": { "enabled": true }
+  // Secrets (wrangler secret put / .dev.vars locally):
+  //   DESIGNER_PASSWORD, CLIENT_PASSWORD, SESSION_SECRET, ALLOWED_ORIGINS
+}
