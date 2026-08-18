@@ -1038,3 +1038,17 @@
   width: 15px;
   height: 15px;
 }
+
+.login-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.login-actions .login-btn {
+  flex: 1;
+}
+
+.login-btn.secondary {
+  background: var(--muted);
+  color: var(--ink);
+}

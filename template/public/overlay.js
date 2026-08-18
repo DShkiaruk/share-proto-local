@@ -502,7 +502,13 @@
       if (e.key === 'Enter') submit();
       if (e.key === 'Escape') dismissLogin();
     });
-    card.append(nameIn, passIn, err, btn);
+    // Explicit way out for people who are just using the preview — an icon
+    // alone is easy to miss (client-team request).
+    const notNow = el('button', 'login-btn secondary', 'Not now');
+    notNow.addEventListener('click', dismissLogin);
+    const actions = el('div', 'login-actions');
+    actions.append(notNow, btn);
+    card.append(nameIn, passIn, err, actions);
     loginCard.appendChild(card);
     root.appendChild(loginCard);
     (nameIn.value ? passIn : nameIn).focus();
