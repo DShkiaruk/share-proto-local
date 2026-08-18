@@ -367,9 +367,12 @@
       if (EMBED) {
         // Token missing/expired: ask for credentials in place — the host page
         // is the client's preview, there is no login page to bounce to.
+        // Respect a dismissal: non-reviewers share these previews, and the
+        // poll loop lands here every cycle — it must not re-open the modal.
         authToken = null;
         localStorage.removeItem(TOKEN_KEY);
-        showLogin();
+        if (loginDismissed()) showPill();
+        else showLogin();
       } else {
         location.reload(); // same-origin: the server gate shows login.html
       }
@@ -381,13 +384,66 @@
 
   /* ---------- embed login modal ---------- */
 
+  // Previews are shared with people who don't review designs: the modal must
+  // be dismissible (X / Esc / backdrop click), the dismissal must stick for
+  // the session, and a quiet corner pill takes its place to opt back in.
   let loginCard = null;
+  let loginPill = null;
+  const LOGIN_DISMISS_KEY = 'fp_login_dismissed';
+
+  function loginDismissed() {
+    try {
+      return sessionStorage.getItem(LOGIN_DISMISS_KEY) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  function showPill() {
+    if (loginPill || loginCard || state.role) return;
+    loginPill = el('button', 'login-pill');
+    loginPill.append(icon('comment'), el('span', null, 'Review comments'));
+    loginPill.title = 'Sign in to leave design-review comments';
+    loginPill.addEventListener('click', () => {
+      try {
+        sessionStorage.removeItem(LOGIN_DISMISS_KEY);
+      } catch {}
+      showLogin();
+    });
+    root.appendChild(loginPill);
+  }
+
+  function hidePill() {
+    loginPill?.remove();
+    loginPill = null;
+  }
+
+  function dismissLogin() {
+    if (!loginCard) return;
+    loginCard.remove();
+    loginCard = null;
+    try {
+      sessionStorage.setItem(LOGIN_DISMISS_KEY, '1');
+    } catch {}
+    showPill();
+  }
+
   function showLogin() {
     if (loginCard) return;
+    hidePill();
     setMode(false);
     toolbar.style.display = 'none';
     loginCard = el('div', 'login-wrap');
+    loginCard.addEventListener('click', (e) => {
+      if (e.target === loginCard) dismissLogin();
+    });
     const card = el('div', 'login-card');
+    const closeBtn = el('button', 'login-close');
+    closeBtn.append(icon('close'));
+    closeBtn.title = 'Not now';
+    closeBtn.setAttribute('aria-label', 'Dismiss');
+    closeBtn.addEventListener('click', dismissLogin);
+    card.appendChild(closeBtn);
     card.appendChild(el('div', 'login-title', 'Design review comments'));
     card.appendChild(
       el('div', 'login-sub', 'Enter your name and the password you received — comments you leave will be signed with your name.')
@@ -426,6 +482,10 @@
         authToken = data.token;
         localStorage.setItem(TOKEN_KEY, authToken);
         localStorage.setItem('fp_name', name);
+        try {
+          sessionStorage.removeItem(LOGIN_DISMISS_KEY);
+        } catch {}
+        hidePill();
         loginCard.remove();
         loginCard = null;
         toolbar.style.display = '';
@@ -440,6 +500,7 @@
     btn.addEventListener('click', submit);
     card.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') submit();
+      if (e.key === 'Escape') dismissLogin();
     });
     card.append(nameIn, passIn, err, btn);
     loginCard.appendChild(card);
